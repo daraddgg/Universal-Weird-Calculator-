@@ -4,8 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.api.GeminiApiHelper
-import com.example.calculator.ConversionResult
-import com.example.calculator.WeirdCalculatorEngine
+import com.example.calculator.*
 import com.example.data.ConversionHistory
 import com.example.data.DatabaseProvider
 import com.example.data.HistoryRepository
@@ -38,25 +37,24 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
 
     val calculationResult = MutableStateFlow<ConversionResult?>(null)
 
+    // AI Tab / NLU Engine State
+    val nluQueryState = MutableStateFlow("1000 meters")
+    val nluResultState = MutableStateFlow<ParsedNluResponse?>(null)
+    val nluParsedState = MutableStateFlow<ParsedNluQuery?>(null)
+
     // AI Tab State
     val aiQueryState = MutableStateFlow("")
     val aiResultState = MutableStateFlow("")
     val aiLoadingState = MutableStateFlow(false)
 
-    // Voice Input State
-    val voiceRecordingState = MutableStateFlow(false)
-    val voiceResultState = MutableStateFlow("")
-
-    // OCR Scanning State
-    val ocrScanningState = MutableStateFlow(false)
-    val ocrResultState = MutableStateFlow("")
-
-    // AR Camera measurement State
-    val arCameraState = MutableStateFlow(false)
-    val arResultState = MutableStateFlow("")
+    // Chemistry Tab State
+    val chemistryQueryState = MutableStateFlow("2 H2(g) + O2(g) -> 2 H2O(l)")
+    val chemistryNlpResultState = MutableStateFlow<ParsedChemNlpResponse?>(null)
 
     init {
         performConversion()
+        processNluQuery("1000 meters")
+        processChemistryNlpQuery("2 H2(g) + O2(g) -> 2 H2O(l)")
     }
 
     fun setCategory(category: String) {
@@ -156,63 +154,49 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    fun simulateVoiceInput() {
-        if (voiceRecordingState.value) return
-        voiceRecordingState.value = true
-        voiceResultState.value = "Listening to voice input..."
-        viewModelScope.launch {
-            delay(1800)
-            voiceRecordingState.value = false
-            val randomVoiceQuery = listOf(
-                "How many cats weigh 500 kilograms?",
-                "How many heartbeats happen in two years?",
-                "How many movies fit into 1 TB?",
-                "How many Eiffel Towers equal 5 kilometers?",
-                "How many phone charges are in 1 kilowatt-hour?"
-            ).random()
-            voiceResultState.value = "Parsed: \"$randomVoiceQuery\""
-            askGeminiQuery(randomVoiceQuery)
-        }
-    }
+    fun processChemistryNlpQuery(query: String) {
+        chemistryQueryState.value = query
+        val response = ChemistryEngine.parseChemistryNlp(query)
+        chemistryNlpResultState.value = response
 
-    fun simulateOcrScan(imageType: String) {
-        if (ocrScanningState.value) return
-        ocrScanningState.value = true
-        ocrResultState.value = "Analyzing image structure..."
-        viewModelScope.launch {
-            delay(2000)
-            ocrScanningState.value = false
-            val (tripleData, pairData) = when (imageType) {
-                "Receipt" -> Triple("Extracted Weight: 5000 kg from Elephant bill", "5000", "Weight / Mass") to Pair("kg", "t")
-                "Blueprint" -> Triple("Extracted Length: 1000 meters from Runway plan", "1000", "Length") to Pair("m", "km")
-                "StorageLog" -> Triple("Extracted Volume capacity: 2 TB from Cloud server log", "2", "Digital Storage") to Pair("tb", "gb")
-                else -> Triple("Extracted Currency: 15 Euros from Dinner balance", "15", "Money") to Pair("eur", "usd")
+        if (response.success) {
+            val historyItem = ConversionHistory(
+                query = "Chemistry Engine: $query",
+                value = 0.0,
+                category = "Chemistry Lab 🧪",
+                fromUnit = response.queryType,
+                toUnit = "Molar/Thermo Result",
+                result = response.interpretation,
+                comparisonText = response.outputMarkdown,
+                fact = "Solved with 100% deterministic offline Chemistry Engine."
+            )
+            viewModelScope.launch {
+                repository.insert(historyItem)
             }
-            val (resultText, valStr, cat) = tripleData
-            val (fromU, toU) = pairData
-            ocrResultState.value = "Successfully parsed: $resultText"
-            inputValueState.value = valStr
-            setCategory(cat)
-            setFromUnit(fromU)
-            setToUnit(toU)
         }
     }
 
-    fun simulateArCameraMeasure() {
-        if (arCameraState.value) return
-        arCameraState.value = true
-        arResultState.value = "Calibrating camera gyroscope..."
-        viewModelScope.launch {
-            delay(1000)
-            arResultState.value = "Detecting plane levels..."
-            delay(1000)
-            arResultState.value = "Measured length: 5 meters (Placed laser tape)"
-            delay(800)
-            arCameraState.value = false
-            inputValueState.value = "5"
-            setCategory("Length")
-            setFromUnit("m")
-            setToUnit("km")
+    fun processNluQuery(query: String) {
+        nluQueryState.value = query
+        val parsed = WeirdCalculatorNluParser.parseQuery(query)
+        nluParsedState.value = parsed
+        val response = WeirdCalculatorNluParser.executeNluQuery(parsed)
+        nluResultState.value = response
+
+        if (response.success && parsed.errorOrPrompt == null) {
+            val historyItem = ConversionHistory(
+                query = "NLP Match: $query",
+                value = parsed.value,
+                category = parsed.category,
+                fromUnit = parsed.fromUnitKey,
+                toUnit = parsed.targetObject?.name ?: "NLU-Insight",
+                result = response.resultText,
+                comparisonText = response.comparisons.joinToString("\n"),
+                fact = response.fact
+            )
+            viewModelScope.launch {
+                repository.insert(historyItem)
+            }
         }
     }
 }

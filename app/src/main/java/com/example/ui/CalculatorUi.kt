@@ -103,9 +103,9 @@ fun AppNavigationScreen(viewModel: CalculatorViewModel) {
                 NavigationBarItem(
                     selected = selectedTab == 4,
                     onClick = { selectedTab = 4 },
-                    icon = { Text("🔬", fontSize = 20.sp) },
-                    label = { Text("Labs", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                    modifier = Modifier.testTag("nav_tab_labs")
+                    icon = { Text("🧪", fontSize = 20.sp) },
+                    label = { Text("Chem Lab", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                    modifier = Modifier.testTag("nav_tab_chemistry")
                 )
             }
         }
@@ -120,7 +120,7 @@ fun AppNavigationScreen(viewModel: CalculatorViewModel) {
                 1 -> AiModeTabScreen(viewModel)
                 2 -> CategoryExplorerTabScreen(viewModel)
                 3 -> HistoryTabScreen(viewModel)
-                4 -> LabsTabScreen(viewModel)
+                4 -> ChemistryTabScreen(viewModel)
             }
         }
     }
@@ -488,20 +488,23 @@ fun ConverterTabScreen(viewModel: CalculatorViewModel) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AiModeTabScreen(viewModel: CalculatorViewModel) {
-    val aiQuery by viewModel.aiQueryState.collectAsStateWithLifecycle()
-    val aiResult by viewModel.aiResultState.collectAsStateWithLifecycle()
-    val aiLoading by viewModel.aiLoadingState.collectAsStateWithLifecycle()
+    val nluQuery by viewModel.nluQueryState.collectAsStateWithLifecycle()
+    val nluResult by viewModel.nluResultState.collectAsStateWithLifecycle()
+    val nluParsed by viewModel.nluParsedState.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
-    var textInput by remember { mutableStateOf("") }
+    val clipboardManager = LocalClipboardManager.current
+    var textInput by remember { mutableStateOf(nluQuery) }
 
     val presetQueries = listOf(
-        "How many cats weigh 500 kilograms?",
-        "How many heartbeats happen in two years?",
-        "How many movies fit into 1 TB?",
-        "How many Eiffel Towers equal 5 kilometers?",
-        "How many phone charges are in 1 kilowatt-hour?"
+        "1000 meters",
+        "500 kg in elephants",
+        "1 TB in photos",
+        "2 hours in heartbeats",
+        "100 dollars in pizzas",
+        "how many football fields is 3 km",
+        "energy of 1 kWh in phone charges"
     )
 
     Column(
@@ -512,50 +515,59 @@ fun AiModeTabScreen(viewModel: CalculatorViewModel) {
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Title block
         Text(
-            text = "🧠 Gemini AI Natural Language Mode",
+            text = "🧠 Smart Natural Language & Reality Engine",
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary
         )
 
         Text(
-            text = "Ask any comparative, weird, or scientific conversion question. Our AI model will perform calculations on standard metrics and deliver interactive real-world size translations.",
+            text = "Type fully-formed natural inquiries below. The deterministic NLU engine normalizes quantities, matches unit synonyms offline, and delivers mathematically exact comparisons without AI hallucination.",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onBackground
         )
 
-        // Text Input Field Box
+        // Text input field with instant NLU updates
         OutlinedTextField(
             value = textInput,
-            onValueChange = { textInput = it },
-            label = { Text("Ask Gemini... (e.g. 'How many coffee cups cost 100 Euros?')") },
-            maxLines = 4,
+            onValueChange = {
+                textInput = it
+                viewModel.processNluQuery(it) // Live results while typing
+            },
+            label = { Text("Search / Convert... (e.g., '1000 meters' or '100 dollars in pizzas')") },
+            maxLines = 3,
+            singleLine = false,
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("ai_text_input"),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = {
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = {
                 if (textInput.isNotBlank()) {
-                    viewModel.askGeminiQuery(textInput)
-                    focusManager.clearFocus()
+                    viewModel.processNluQuery(textInput)
                 }
+                focusManager.clearFocus()
             }),
             trailingIcon = {
                 if (textInput.isNotBlank()) {
                     IconButton(onClick = {
-                        viewModel.askGeminiQuery(textInput)
-                        focusManager.clearFocus()
+                        textInput = ""
+                        viewModel.processNluQuery("")
                     }) {
-                        Icon(Icons.Default.Send, "Send")
+                        Icon(Icons.Default.Clear, "Clear")
                     }
                 }
-            }
+            },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline
+            )
         )
 
-        // Standard suggestion row
+        // Preset Quick Chips selection grid
         Text(
-            "💡 Tap comparative suggestions:",
+            "💡 Tap quick comparison presets:",
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.secondary
@@ -569,7 +581,7 @@ fun AiModeTabScreen(viewModel: CalculatorViewModel) {
                 SuggestionChip(
                     onClick = {
                         textInput = pq
-                        viewModel.askGeminiQuery(pq)
+                        viewModel.processNluQuery(pq)
                     },
                     label = { Text(pq, fontSize = 11.sp, maxLines = 1) },
                     modifier = Modifier.padding(bottom = 4.dp).testTag("suggest_${pq.take(15)}")
@@ -577,78 +589,173 @@ fun AiModeTabScreen(viewModel: CalculatorViewModel) {
             }
         }
 
-        // Loading or Result View Card
-        if (aiLoading) {
-            ElevatedCard(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .padding(32.dp)
-                        .fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        "AI Brain is calculating custom metrics...",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                        textAlign = TextAlign.Center
+        // Active output visualization depending on the result success state
+        nluResult?.let { result ->
+            if (!result.success) {
+                // Return an elegant "Clarification Needed" or "Insufficient Data" Warning Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
                     )
-                }
-            }
-        } else if (aiResult.isNotBlank()) {
-            ElevatedCard(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp)
-                )
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            "🤖 Gemini AI Analysis",
-                            fontWeight = FontWeight.Black,
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        IconButton(onClick = {
-                            val manager = android.content.Context.CLIPBOARD_SERVICE
-                            val clip = android.content.ClipData.newPlainText("weird_calc", aiResult)
-                            (context.getSystemService(manager) as android.content.ClipboardManager).setPrimaryClip(clip)
-                            Toast.makeText(context, "Copied response!", Toast.LENGTH_SHORT).show()
-                        }) {
-                            Icon(Icons.Default.Share, "Copy")
+                        Text("⚠️", fontSize = 28.sp)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                "Ambiguous input / Insufficient Data",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                result.simpleExplanation,
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
                         }
                     }
-                    Spacer(modifier = Modifier.height(10.dp))
+                }
+            } else {
+                // Success Case - Master display cards block
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+
+                    // 1. Direct conversion result
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "✨ EXACT CONVERSION RESULT",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    letterSpacing = 1.sp
+                                )
+                                IconButton(
+                                    onClick = {
+                                        clipboardManager.setText(AnnotatedString(result.resultText))
+                                        Toast.makeText(context, "Copied result to clipboard!", Toast.LENGTH_SHORT).show()
+                                    }
+                                ) {
+                                    Icon(Icons.Default.Share, "Copy", tint = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                            Text(
+                                text = result.resultText,
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.testTag("ai_result_text")
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = result.simpleExplanation,
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+
+                    // 2. Structured NLU Parser Normalized output JSON (as requested)
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                "🖥️ NLP Engine Normalized Parser Formats",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.secondary,
+                                letterSpacing = 1.sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = result.structuredFormat,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    )
+                                    .padding(10.dp)
+                            )
+                        }
+                    }
+
+                    // 3. Real-world comparisons
                     Text(
-                        text = aiResult,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium,
-                        lineHeight = 22.sp,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.testTag("ai_result_text")
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "⚠️ SECURITY & ACCURACY NOTE: Simulated as a prototype using Direct-REST. Keep keys secure.",
-                        fontSize = 9.sp,
+                        "🍎 Comparative Real-World Analogies",
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.error
+                        color = MaterialTheme.colorScheme.primary
                     )
+
+                    result.comparisons.forEach { comp ->
+                        ElevatedCard(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .animateContentSize()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = comp,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+
+                    // 4. Fun Fact
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("💡", fontSize = 28.sp)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    "Scientifically Accurate Fun Fact:",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.tertiary
+                                )
+                                Text(
+                                    text = result.fact,
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1107,199 +1214,6 @@ fun HistoryTabScreen(viewModel: CalculatorViewModel) {
                 Icon(Icons.Default.Clear, "Clear")
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Clear All Database Log entries", fontWeight = FontWeight.Bold)
-            }
-        }
-    }
-}
-
-@Composable
-fun LabsTabScreen(viewModel: CalculatorViewModel) {
-    val voiceRecording by viewModel.voiceRecordingState.collectAsStateWithLifecycle()
-    val voiceResult by viewModel.voiceResultState.collectAsStateWithLifecycle()
-
-    val ocrScanning by viewModel.ocrScanningState.collectAsStateWithLifecycle()
-    val ocrResult by viewModel.ocrResultState.collectAsStateWithLifecycle()
-
-    val arCamera by viewModel.arCameraState.collectAsStateWithLifecycle()
-    val arResult by viewModel.arResultState.collectAsStateWithLifecycle()
-
-    val context = LocalContext.current
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text(
-            text = "🔬 Interactive Simulation Labs",
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
-        )
-
-        Text(
-            text = "Simulate advanced operations directly. Since emulators lack microphone inputs, native gyroscopes, and physical document receipts, these interactive modules replicate calculations beautifully.",
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-
-        // 1. Voice Input simulator
-        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("🎤 Voice Input / Speech Recognition", fontWeight = FontWeight.Black, fontSize = 15.sp)
-                Spacer(modifier = Modifier.height(6.dp))
-                Text("Replicates human voice query parsing using neural speech recognition modeling.", fontSize = 12.sp)
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Button(
-                    onClick = { viewModel.simulateVoiceInput() },
-                    modifier = Modifier.fillMaxWidth().testTag("voice_demo_button"),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (voiceRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                    )
-                ) {
-                    if (voiceRecording) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White)
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text("Modulating sound wave intervals...")
-                    } else {
-                        Text("🎤 Simulate Voice input speech")
-                    }
-                }
-
-                if (voiceResult.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-                        Text(
-                            voiceResult,
-                            modifier = Modifier.padding(12.dp).fillMaxWidth().testTag("voice_result_banner"),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
-                }
-            }
-        }
-
-        // 2. OCR Optical Receipt scanner
-        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("📷 OCR Scanner Simulation", fontWeight = FontWeight.Black, fontSize = 15.sp)
-                Spacer(modifier = Modifier.height(6.dp))
-                Text("Extract variables directly from target receipts, shipment logs, and digital layouts.", fontSize = 12.sp)
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                if (ocrScanning) {
-                    // Green laser animating scanner bar
-                    val infiniteTransition = rememberInfiniteTransition()
-                    val offsetY by infiniteTransition.animateFloat(
-                        initialValue = 0f,
-                        targetValue = 60f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(1000, easing = LinearEasing),
-                            repeatMode = RepeatMode.Reverse
-                        )
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(80.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color.Black.copy(alpha = 0.5f)),
-                        contentAlignment = Alignment.TopCenter
-                    ) {
-                        Text(
-                            "[CAMERA PREVIEW FEED]",
-                            color = Color.White.copy(alpha = 0.4f),
-                            modifier = Modifier.align(Alignment.Center)
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(3.dp)
-                                .offset(y = offsetY.dp)
-                                .background(Color.Green)
-                        )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { viewModel.simulateOcrScan("Receipt") },
-                        modifier = Modifier.weight(1f).testTag("ocr_receipt_button"),
-                        enabled = !ocrScanning
-                    ) {
-                        Text("🐘 Elephant slip", fontSize = 10.sp)
-                    }
-                    Button(
-                        onClick = { viewModel.simulateOcrScan("Blueprint") },
-                        modifier = Modifier.weight(1f),
-                        enabled = !ocrScanning
-                    ) {
-                        Text("📐 Airport draft", fontSize = 10.sp)
-                    }
-                    Button(
-                        onClick = { viewModel.simulateOcrScan("StorageLog") },
-                        modifier = Modifier.weight(1f),
-                        enabled = !ocrScanning
-                    ) {
-                        Text("💾 Server Log", fontSize = 10.sp)
-                    }
-                }
-
-                if (ocrResult.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                        Text(
-                            ocrResult,
-                            modifier = Modifier.padding(12.dp).fillMaxWidth().testTag("ocr_result_banner"),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                    }
-                }
-            }
-        }
-
-        // 3. AR Camera Depth measurement
-        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("📏 AR Camera Tape Measure Link", fontWeight = FontWeight.Black, fontSize = 15.sp)
-                Spacer(modifier = Modifier.height(6.dp))
-                Text("Simulates augmented reality surface grid leveling to calculate visual distances.", fontSize = 12.sp)
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Button(
-                    onClick = { viewModel.simulateArCameraMeasure() },
-                    modifier = Modifier.fillMaxWidth().testTag("ar_depth_button"),
-                    enabled = !arCamera
-                ) {
-                    Text("📡 Initiate AR Tape level")
-                }
-
-                if (arCamera || arResult.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
-                        Text(
-                            arResult,
-                            modifier = Modifier.padding(12.dp).fillMaxWidth().testTag("ar_result_banner"),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer
-                        )
-                    }
-                }
             }
         }
     }
