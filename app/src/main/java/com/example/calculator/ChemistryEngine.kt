@@ -116,65 +116,179 @@ object ChemistryEngine {
      * and returns a map of atom counts, e.g., {"Fe" to 2, "S" to 3, "O" to 12}.
      * Throws IllegalArgumentException on invalid structures.
      */
-    fun parseFormula(input: String): Map<String, Int> {
-        val cleanInput = input.replace("\\s".toRegex(), "")
-        if (cleanInput.isEmpty()) {
-            throw IllegalArgumentException("Formula cannot be empty.")
+    enum class TokenType {
+        ELEMENT, NUMBER, OPEN_PAREN, CLOSE_PAREN
+    }
+
+    data class Token(val type: TokenType, val value: String)
+
+    interface FormulaNode {
+        fun flatten(multiplier: Int): Map<String, Int>
+    }
+
+    class ElementNode(val symbol: String, val count: Int) : FormulaNode {
+        override fun flatten(multiplier: Int): Map<String, Int> {
+            return mapOf(symbol to count * multiplier)
         }
+    }
 
-        var i = 0
-        val length = cleanInput.length
-
-        fun parseGroup(): Map<String, Int> {
-            val groupCounts = mutableMapOf<String, Int>()
-            while (i < length) {
-                val char = cleanInput[i]
-                if (char == ')') {
-                    i++ // consume ')'
-                    break
-                } else if (char == '(') {
-                    i++ // consume '('
-                    val subGroup = parseGroup()
-                    // Extract potential subscript after parenthesis
-                    var subscriptVal = 1
-                    var subscriptStr = ""
-                    while (i < length && cleanInput[i].isDigit()) {
-                        subscriptStr += cleanInput[i]
-                        i++
-                    }
-                    if (subscriptStr.isNotEmpty()) {
-                        subscriptVal = subscriptStr.toInt()
-                    }
-                    for ((elem, count) in subGroup) {
-                        groupCounts[elem] = (groupCounts[elem] ?: 0) + count * subscriptVal
-                    }
-                } else if (char.isUpperCase()) {
-                    // Start parsing an element symbol
-                    var symbol = char.toString()
-                    i++
-                    while (i < length && cleanInput[i].isLowerCase()) {
-                        symbol += cleanInput[i]
-                        i++
-                    }
-                    // Extract optional subscript
-                    var subscriptVal = 1
-                    var subscriptStr = ""
-                    while (i < length && cleanInput[i].isDigit()) {
-                        subscriptStr += cleanInput[i]
-                        i++
-                    }
-                    if (subscriptStr.isNotEmpty()) {
-                        subscriptVal = subscriptStr.toInt()
-                    }
-                    groupCounts[symbol] = (groupCounts[symbol] ?: 0) + subscriptVal
-                } else {
-                    throw IllegalArgumentException("Unexpected character '$char' in chemical formula at position $i.")
+    class GroupNode(val children: List<FormulaNode>, val multiplier: Int) : FormulaNode {
+        override fun flatten(outMultiplier: Int): Map<String, Int> {
+            val merged = mutableMapOf<String, Int>()
+            val totalMultiplier = multiplier * outMultiplier
+            for (child in children) {
+                val childMap = child.flatten(totalMultiplier)
+                for ((sym, count) in childMap) {
+                    merged[sym] = (merged[sym] ?: 0) + count
                 }
             }
-            return groupCounts
+            return merged
         }
+    }
 
-        val result = parseGroup()
+    fun tokenizeFormula(formula: String): List<Token> {
+        val tokens = mutableListOf<Token>()
+        var i = 0
+        val length = formula.length
+        while (i < length) {
+            val char = formula[i]
+            when {
+                char == '(' -> {
+                    tokens.add(Token(TokenType.OPEN_PAREN, "("))
+                    i++
+                }
+                char == ')' -> {
+                    tokens.add(Token(TokenType.CLOSE_PAREN, ")"))
+                    i++
+                }
+                char.isUpperCase() -> {
+                    var symbol = char.toString()
+                    i++
+                    while (i < length && formula[i].isLowerCase()) {
+                        symbol += formula[i]
+                        i++
+                    }
+                    tokens.add(Token(TokenType.ELEMENT, symbol))
+                }
+                char.isDigit() -> {
+                    var numStr = char.toString()
+                    i++
+                    while (i < length && formula[i].isDigit()) {
+                        numStr += formula[i]
+                        i++
+                    }
+                    tokens.add(Token(TokenType.NUMBER, numStr))
+                }
+                else -> {
+                    throw IllegalArgumentException("Unexpected character '$char' in formula.")
+                }
+            }
+        }
+        return tokens
+    }
+
+    fun parseTokensToNodes(tokens: List<Token>): List<FormulaNode> {
+        var index = 0
+        fun parseNext(): List<FormulaNode> {
+            val nodes = mutableListOf<FormulaNode>()
+            while (index < tokens.size) {
+                val token = tokens[index]
+                when (token.type) {
+                    TokenType.OPEN_PAREN -> {
+                        index++ // consume '('
+                        val subNodes = parseNext() // parse content inside parens
+                        if (index >= tokens.size || tokens[index].type != TokenType.CLOSE_PAREN) {
+                            throw IllegalArgumentException("Mismatched parenthesis in formula.")
+                        }
+                        index++ // consume ')'
+                        var mult = 1
+                        if (index < tokens.size && tokens[index].type == TokenType.NUMBER) {
+                            mult = tokens[index].value.toInt()
+                            index++ // consume multiplier
+                        }
+                        nodes.add(GroupNode(subNodes, mult))
+                    }
+                    TokenType.CLOSE_PAREN -> {
+                        break
+                    }
+                    TokenType.ELEMENT -> {
+                        val symbol = token.value
+                        index++ // consume symbol
+                        var count = 1
+                        if (index < tokens.size && tokens[index].type == TokenType.NUMBER) {
+                            count = tokens[index].value.toInt()
+                            index++ // consume multiplier
+                        }
+                        nodes.add(ElementNode(symbol, count))
+                    }
+                    TokenType.NUMBER -> {
+                        throw IllegalArgumentException("Unexpected number token without element or group prefix.")
+                    }
+                }
+            }
+            return nodes
+        }
+        
+        val rootNodes = parseNext()
+        if (index < tokens.size) {
+            throw IllegalArgumentException("Extraneous tokens near end of formula.")
+        }
+        return rootNodes
+    }
+
+    fun cleanStateIndicator(formula: String): String {
+        val trimmed = formula.trim()
+        val suffixList = listOf("(g)", "(l)", "(s)", "(aq)", "(G)", "(L)", "(S)", "(AQ)")
+        for (suffix in suffixList) {
+            if (trimmed.endsWith(suffix)) {
+                return trimmed.dropLast(suffix.length).trim()
+            }
+        }
+        return trimmed
+    }
+
+    fun checkParsingCompleteness(input: String) {
+        val trimmed = input.trim()
+        if (trimmed.isEmpty()) {
+            throw IllegalArgumentException("Parsing incomplete - expanding chemical structure")
+        }
+        val openCount = trimmed.count { it == '(' }
+        val closeCount = trimmed.count { it == ')' }
+        if (openCount != closeCount) {
+            throw IllegalArgumentException("Parsing incomplete - expanding chemical structure")
+        }
+        if (trimmed.endsWith("+") || trimmed.endsWith("->") || trimmed.endsWith("=") || trimmed.endsWith("→")) {
+            throw IllegalArgumentException("Parsing incomplete - expanding chemical structure")
+        }
+    }
+
+    /**
+     * Parses a chemical formula (e.g., "H2O", "Ca(OH)2", "Fe2(SO4)3")
+     * and returns a map of atom counts, e.g., {"Fe" to 2, "S" to 3, "O" to 12}.
+     * Throws IllegalArgumentException on invalid structures.
+     * Guaranteed to adhere to requested structural parsing pipeline order:
+     * 1. Parse formula (Tokenization)
+     * 2. Expand parentheses (AST node scaling)
+     * 3. Count atoms (Map reduction and periodic database verification)
+     */
+    fun parseFormula(input: String): Map<String, Int> {
+        val cleanInput = cleanStateIndicator(input.replace("\\s".toRegex(), ""))
+        checkParsingCompleteness(cleanInput)
+
+        // 1. Parse formula
+        val tokens = tokenizeFormula(cleanInput)
+
+        // 2. Expand parentheses
+        val nodes = parseTokensToNodes(tokens)
+
+        // 3. Count atoms
+        val result = mutableMapOf<String, Int>()
+        for (node in nodes) {
+            val flatNode = node.flatten(1)
+            for ((key, value) in flatNode) {
+                result[key] = (result[key] ?: 0) + value
+            }
+        }
 
         // Validate elements against Database
         for (elem in result.keys) {
@@ -202,6 +316,7 @@ object ChemistryEngine {
      * Parses a reaction string (e.g. "2 H2 + O2 -> 2 H2O") and returns a parsedEquation
      */
     fun parseReaction(reactionStr: String): parsedEquation {
+        checkParsingCompleteness(reactionStr)
         val delimiters = listOf("->", "→", "=")
         var splitResult: List<String> = emptyList()
         for (delim in delimiters) {
@@ -246,10 +361,10 @@ object ChemistryEngine {
 
                 // Check standard state indicator: e.g. "H2O(l)" or "CO2(g)"
                 val isGas = formulaRaw.endsWith("(g)", ignoreCase = true)
-                // We keep clean formula for mass calculations (removing state indicators if present to prevent parsing errors)
-                val cleanFormula = formulaRaw.substringBefore("(").trim()
+                // Clean standard state indicators using cleanStateIndicator helper
+                val cleanFormula = cleanStateIndicator(formulaRaw)
 
-                // Validate formula parses successfully
+                // Validate formula parses successfully (fully parses and completely expands)
                 parseFormula(cleanFormula)
 
                 ReactionParticipant(coeffVal, formulaRaw, isGas)
@@ -267,6 +382,91 @@ object ChemistryEngine {
     }
 
     /**
+     * Step 4: Balance equation
+     * Determines positive integer coefficients to satisfy the conservation of elements.
+     */
+    fun balanceEquation(eq: parsedEquation): parsedEquation {
+        val reactantFormulas = eq.reactants.map { cleanStateIndicator(it.formula) }
+        val productFormulas = eq.products.map { cleanStateIndicator(it.formula) }
+
+        val reactantAtoms = reactantFormulas.map { parseFormula(it) }
+        val productAtoms = productFormulas.map { parseFormula(it) }
+
+        // Short-circuit if already balanced with existing coefficients
+        val existingReactants = eq.reactants.map { it.coefficient }
+        val existingProducts = eq.products.map { it.coefficient }
+        if (isBalanced(reactantAtoms, existingReactants, productAtoms, existingProducts)) {
+            return eq
+        }
+
+        val numReactants = eq.reactants.size
+        val numProducts = eq.products.size
+        val numTerms = numReactants + numProducts
+
+        val maxCoeff = when {
+            numTerms <= 3 -> 15
+            numTerms == 4 -> 10
+            numTerms == 5 -> 6
+            else -> 4
+        }
+
+        val coeffs = IntArray(numTerms) { 1 }
+
+        fun search(index: Int): Boolean {
+            if (index == numTerms) {
+                val leftCoeffs = coeffs.slice(0 until numReactants)
+                val rightCoeffs = coeffs.slice(numReactants until numTerms)
+                return isBalanced(reactantAtoms, leftCoeffs, productAtoms, rightCoeffs)
+            }
+
+            for (c in 1..maxCoeff) {
+                coeffs[index] = c
+                if (search(index + 1)) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        if (search(0)) {
+            val balancedReactants = eq.reactants.mapIndexed { idx, part ->
+                part.copy(coefficient = coeffs[idx])
+            }
+            val balancedProducts = eq.products.mapIndexed { idx, part ->
+                part.copy(coefficient = coeffs[numReactants + idx])
+            }
+            return parsedEquation(balancedReactants, balancedProducts)
+        } else {
+            return eq
+        }
+    }
+
+    private fun isBalanced(
+        reactants: List<Map<String, Int>>,
+        reactantCoeffs: List<Int>,
+        products: List<Map<String, Int>>,
+        productCoeffs: List<Int>
+    ): Boolean {
+        val reactantTotals = mutableMapOf<String, Int>()
+        val productTotals = mutableMapOf<String, Int>()
+
+        for (i in reactants.indices) {
+            val coeff = reactantCoeffs[i]
+            for ((elem, count) in reactants[i]) {
+                reactantTotals[elem] = (reactantTotals[elem] ?: 0) + count * coeff
+            }
+        }
+        for (i in products.indices) {
+            val coeff = productCoeffs[i]
+            for ((elem, count) in products[i]) {
+                productTotals[elem] = (productTotals[elem] ?: 0) + count * coeff
+            }
+        }
+        return reactantTotals == productTotals
+    }
+
+    /**
+     * Step 5: Validate conservation.
      * Verifies conservation of mass: checks if atoms of each element are balanced on both sides.
      * Throws exception if atomic sums do not match.
      */
@@ -276,7 +476,7 @@ object ChemistryEngine {
 
         for (part in eq.reactants) {
             // Remove state indicator to parse formula properly
-            val cleanForm = part.formula.substringBefore("(").trim()
+            val cleanForm = cleanStateIndicator(part.formula)
             val atomsMap = parseFormula(cleanForm)
             for ((symbol, count) in atomsMap) {
                 reactantAtoms[symbol] = (reactantAtoms[symbol] ?: 0) + count * part.coefficient
@@ -284,7 +484,7 @@ object ChemistryEngine {
         }
 
         for (part in eq.products) {
-            val cleanForm = part.formula.substringBefore("(").trim()
+            val cleanForm = cleanStateIndicator(part.formula)
             val atomsMap = parseFormula(cleanForm)
             for ((symbol, count) in atomsMap) {
                 productAtoms[symbol] = (productAtoms[symbol] ?: 0) + count * part.coefficient
@@ -305,6 +505,24 @@ object ChemistryEngine {
         }
     }
 
+    /**
+     * Complete sequential processing pipeline strictly adhering to the requested order:
+     * 1. Parse formula (Internal tokenization)
+     * 2. Expand parentheses (Internal AST node scaling)
+     * 3. Count atoms (Internal Map reduction)
+     * 4. Balance equation (Determine positive integer coefficients using backtracking)
+     * 5. Validate conservation (Verify final stoichiometry element counts)
+     */
+    fun processAndValidateReaction(reactionStr: String): parsedEquation {
+        // Steps 1 to 3 happen sequentially for every chemical element inside parseReaction -> parseFormula
+        val eq = parseReaction(reactionStr)
+        // Step 4: Balance equation
+        val balancedEq = balanceEquation(eq)
+        // Step 5: Validate conservation
+        validateConservationOfMass(balancedEq)
+        return balancedEq
+    }
+
     // --- COMPUTATION MODULES IMPLEMENTATION ---
 
     /**
@@ -318,12 +536,12 @@ object ChemistryEngine {
         // 2. Prepare physical properties of reactants
         val participantMolarMasses = mutableMapOf<String, Double>()
         for (r in eq.reactants) {
-            val cleanForm = r.formula.substringBefore("(").trim()
+            val cleanForm = cleanStateIndicator(r.formula)
             val atoms = parseFormula(cleanForm)
             participantMolarMasses[r.formula] = calculateMolarMass(atoms)
         }
         for (p in eq.products) {
-            val cleanForm = p.formula.substringBefore("(").trim()
+            val cleanForm = cleanStateIndicator(p.formula)
             val atoms = parseFormula(cleanForm)
             participantMolarMasses[p.formula] = calculateMolarMass(atoms)
         }
@@ -743,8 +961,7 @@ object ChemistryEngine {
         if (q.contains("->") || q.contains("→") || q.contains("=")) {
             try {
                 val inputReactCap = formatChemicalCap(query)
-                val eq = parseReaction(inputReactCap)
-                validateConservationOfMass(eq)
+                val eq = processAndValidateReaction(inputReactCap)
                 
                 // Let's solve thermodynamic balances if available, else standard balancing summaries
                 val thermo = solveThermodynamics(eq, 298.15)
