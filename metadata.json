@@ -1,0 +1,6 @@
+{
+  "name": "Universal Weird Calculator",
+  "description": "Convert scientific units into weird real-world comparisons, with interactive facts and AI natural language capabilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
